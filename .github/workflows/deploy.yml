@@ -12,7 +12,7 @@ jobs:
       - name: Update rag_conv + restart api
         run: |
           set -euo pipefail
-          echo "$(date -Is) DEPLOY from $GITHUB_REPOSITORY@$GITHUB_SHA" >> /srv/capstone/deploy.log
+          echo "$(date -Is) DEPLOY from $GITHUB_REPOSITORY@$GITHUB_SHA" >> /srv/capstone/logs/deploy.log
 
           cd /srv/capstone/cappie_run/rag_conv
           git fetch --all --prune
