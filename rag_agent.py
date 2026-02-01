@@ -13,6 +13,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
+_VECTOR_DB_CACHE = None
+
 BASE_DIR = Path(__file__).resolve().parent                  
 PROJECT_ROOT = BASE_DIR.parent                              
 PERSIST_DIR = (PROJECT_ROOT / "vectordb/tracksante_chroma").resolve()
@@ -88,12 +90,17 @@ def merge_facts(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]
     return merged
 
 def load_vectordb() -> Chroma:
+    global _VECTOR_DB_CACHE
+    if _VECTOR_DB_CACHE is not None:
+        return _VECTOR_DB_CACHE
+    
     embeddings = OllamaEmbeddings(model=OLLAMA_EMBED_MODEL, base_url=OLLAMA_BASE_URL)
-    return Chroma(
+    _VECTOR_DB_CACHE = Chroma(
         collection_name="tracksante_kb",
         embedding_function=embeddings,
         persist_directory=str(PERSIST_DIR)
     )
+    return _VECTOR_DB_CACHE
 
 def retrieve_context(vs: Chroma, query: str, k: int = 4) -> (str, List[str]):
     # TODO upgrade to MMR
@@ -136,7 +143,7 @@ def chat_once(user_id: str, user_message: str, session_id: str | None = None) ->
         else:
             chat_history.append(AIMessage(content=item["content"]))
 
-    llm = ChatOllama(model=OLLAMA_CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
+    llm = ChatOllama(model=OLLAMA_CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0, timeout=90)
 
     vs = load_vectordb()
     context, sources = retrieve_context(vs, user_message, k=4)
@@ -206,7 +213,7 @@ def main():
         else:
             chat_history.append(AIMessage(content=item["content"]))
 
-    llm = ChatOllama(model="llama3.1", temperature=0)
+    llm = ChatOllama(model="llama3.1", temperature=0, timeout=90)
 
     vs = load_vectordb()
 
