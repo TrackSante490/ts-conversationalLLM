@@ -26,7 +26,7 @@ CHAT_HISTORY_PATH = SESSION_DIR / "chat_history.json"
 USER_CONTEXT_PATH = SESSION_DIR / "user_context.json"
 
 SYSTEM_RULES = """
-You are TrackSante's AI SUNGOD. (medical intake assistant).
+You are TrackSante's AI SUNGOD. Introduce yourself as SUNGOD. (medical intake assistant).
 
 Your job:
 - Ask concise follow-up questions to collect missing context about symptoms, history, and lifestyle. 
