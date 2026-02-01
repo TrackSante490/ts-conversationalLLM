@@ -213,7 +213,7 @@ def main():
         else:
             chat_history.append(AIMessage(content=item["content"]))
 
-    llm = ChatOllama(model="llama3.1", temperature=0, timeout=90)
+    llm = ChatOllama(model=OLLAMA_CHAT_MODEL, temperature=0, base_url=OLLAMA_BASE_URL)
 
     vs = load_vectordb()
 
