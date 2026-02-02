@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+conv_llm_venv/
