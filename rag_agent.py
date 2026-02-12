@@ -224,6 +224,7 @@ def chat_once(
     user_message: str,
     session_id: str | None = None,
 ) -> Dict[str, Any]:
+
     """
     Single-turn chat call for FastAPI.
 
@@ -235,21 +236,20 @@ def chat_once(
 
     import re
 
-    # --- sanitize user_id for filesystem safety ---
+    # temporary until we implement log ins, user_id for filesystem safety
     safe_user_id = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip() or "anonymous")
 
-    # --- decide if this is a new session ---
+    #decide if this is a new session
     is_new_session = session_id is None
     sid = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # --- session folder ---
     session_dir = (STATE_DIR / "sessions" / safe_user_id / sid)
     session_dir.mkdir(parents=True, exist_ok=True)
 
     chat_history_path = session_dir / "chat_history.json"
     user_context_path = session_dir / "user_context.json"
 
-    # --- load persisted state ONLY if continuing an existing session ---
+    # load persisted state ONLY if continuing an existing session
     if is_new_session:
         chat_history_raw = []
         user_context = {}
@@ -257,7 +257,6 @@ def chat_once(
         chat_history_raw = load_json(chat_history_path, default=[])
         user_context = load_json(user_context_path, default={})
 
-    # --- raw history -> LangChain messages ---
     chat_history: List[Any] = []
     for item in chat_history_raw:
         if item.get("role") == "user":
@@ -275,7 +274,6 @@ def chat_once(
     vs = load_vectordb()
     context, sources = retrieve_context(vs, user_message, k=4)
 
-    # --- run LLM ---
     response = llm.invoke(
         PROMPT.format_messages(
             chat_history=chat_history,
@@ -286,7 +284,7 @@ def chat_once(
     )
     raw = (response.content or "").strip()
 
-    # --- repair if invalid JSON ---
+    #repair if invalid JSON
     try:
         data = json.loads(raw)
     except Exception:
@@ -305,10 +303,10 @@ def chat_once(
         raw = (response2.content or "").strip()
         data = json.loads(raw)
 
-    # --- update stored context ---
+    #update stored context
     user_context = merge_facts(user_context, data.get("collected_facts", {}))
 
-    # --- append history + persist ---
+    # append history + persist
     chat_history.append(HumanMessage(content=user_message))
     chat_history.append(AIMessage(content=raw))
 
@@ -320,11 +318,9 @@ def chat_once(
     save_json(chat_history_path, chat_history_raw_out)
     save_json(user_context_path, user_context)
 
-    # --- ensure sources field ---
     if "sources" not in data or not data["sources"]:
         data["sources"] = sources
 
-    # --- include session_id so frontend can continue the same session ---
     data["session_id"] = sid
     return data
 
