@@ -219,38 +219,63 @@ def retrieve_context(vs: Chroma, query: str, k: int = 4) -> (str, List[str]):
     context = "\n\n".join(chunks) if chunks else "(no relevant snippets retrieved)"
     return context, sources
 
-def chat_once(user_id: str, user_message: str, session_id: str | None = None) -> Dict[str, Any]:
+def chat_once(
+    user_id: str,
+    user_message: str,
+    session_id: str | None = None,
+) -> Dict[str, Any]:
     """
     Single-turn chat call for FastAPI.
-    Stores chat history + user context on disk per session.
-    Returns dict (already parsed JSON).
+
+    Privacy + behavior:
+    - New chat (session_id is None): starts with EMPTY memory (no carryover).
+    - Ongoing chat (session_id provided): loads that session's history/context.
+    - Storage is per-user and per-session on disk.
     """
 
-    # choose a stable session folder (don’t use global SESSION_ID for API calls)
+    import re
+
+    # --- sanitize user_id for filesystem safety ---
+    safe_user_id = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip() or "anonymous")
+
+    # --- decide if this is a new session ---
+    is_new_session = session_id is None
     sid = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-    session_dir = (STATE_DIR / "sessions" / user_id / sid)
+
+    # --- session folder ---
+    session_dir = (STATE_DIR / "sessions" / safe_user_id / sid)
     session_dir.mkdir(parents=True, exist_ok=True)
 
     chat_history_path = session_dir / "chat_history.json"
     user_context_path = session_dir / "user_context.json"
 
-    # load persisted state
-    chat_history_raw = load_json(chat_history_path, default=[])
-    user_context = load_json(user_context_path, default={})
+    # --- load persisted state ONLY if continuing an existing session ---
+    if is_new_session:
+        chat_history_raw = []
+        user_context = {}
+    else:
+        chat_history_raw = load_json(chat_history_path, default=[])
+        user_context = load_json(user_context_path, default={})
 
-    # raw history -> LangChain messages
-    chat_history = []
+    # --- raw history -> LangChain messages ---
+    chat_history: List[Any] = []
     for item in chat_history_raw:
-        if item["role"] == "user":
-            chat_history.append(HumanMessage(content=item["content"]))
+        if item.get("role") == "user":
+            chat_history.append(HumanMessage(content=item.get("content", "")))
         else:
-            chat_history.append(AIMessage(content=item["content"]))
+            chat_history.append(AIMessage(content=item.get("content", "")))
 
-    llm = ChatOllama(model=OLLAMA_CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0, timeout=90)
+    llm = ChatOllama(
+        model=OLLAMA_CHAT_MODEL,
+        base_url=OLLAMA_BASE_URL,
+        temperature=0,
+        timeout=90,
+    )
 
     vs = load_vectordb()
     context, sources = retrieve_context(vs, user_message, k=4)
 
+    # --- run LLM ---
     response = llm.invoke(
         PROMPT.format_messages(
             chat_history=chat_history,
@@ -259,9 +284,9 @@ def chat_once(user_id: str, user_message: str, session_id: str | None = None) ->
             context=context,
         )
     )
-    raw = response.content.strip()
+    raw = (response.content or "").strip()
 
-    # repair if invalid JSON
+    # --- repair if invalid JSON ---
     try:
         data = json.loads(raw)
     except Exception:
@@ -277,31 +302,32 @@ def chat_once(user_id: str, user_message: str, session_id: str | None = None) ->
                 context=context,
             )
         )
-        raw = response2.content.strip()
+        raw = (response2.content or "").strip()
         data = json.loads(raw)
 
-    # update stored context
+    # --- update stored context ---
     user_context = merge_facts(user_context, data.get("collected_facts", {}))
 
-    # append history + persist
+    # --- append history + persist ---
     chat_history.append(HumanMessage(content=user_message))
     chat_history.append(AIMessage(content=raw))
 
-    chat_history_raw = []
+    chat_history_raw_out = []
     for m in chat_history:
         role = "user" if isinstance(m, HumanMessage) else "assistant"
-        chat_history_raw.append({"role": role, "content": m.content})
+        chat_history_raw_out.append({"role": role, "content": m.content})
 
-    save_json(chat_history_path, chat_history_raw)
+    save_json(chat_history_path, chat_history_raw_out)
     save_json(user_context_path, user_context)
 
-    # ensure sources field
+    # --- ensure sources field ---
     if "sources" not in data or not data["sources"]:
         data["sources"] = sources
 
-    # include session_id so the app can continue the same session
+    # --- include session_id so frontend can continue the same session ---
     data["session_id"] = sid
     return data
+
 
 def main():
     #loading persisted state
