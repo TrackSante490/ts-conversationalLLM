@@ -4,6 +4,7 @@ from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from kb_loader import load_markdown_kb
 from pathlib import Path
+import shutil
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1")
@@ -17,6 +18,11 @@ def build_vectordb():
     raw_docs = load_markdown_kb()
     if not raw_docs:
         raise RuntimeError("No knowledge base documents loaded.")
+    
+    if PERSIST_DIR.exists():
+        shutil.rmtree(PERSIST_DIR)
+        print(f"Deleted existing vectordb at {PERSIST_DIR}")
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1200,
         chunk_overlap=200
@@ -32,7 +38,7 @@ def build_vectordb():
     vectordb = Chroma(
         persist_directory=str(PERSIST_DIR),
         embedding_function=embeddings,
-        collection_name="tracksante_kb"
+        collection_name="tracksante_policy"
     )
 
     vectordb.add_documents(docs)

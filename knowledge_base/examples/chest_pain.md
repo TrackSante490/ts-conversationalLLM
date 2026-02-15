@@ -1,8 +1,10 @@
-topic: chest_pain
-type: intake
-severity: high
-module: cardio
 ---
+category: intake_example
+type: symptom_example
+priority: medium
+used_by: guidance_llm
+---
+
 
 Ask about:
 - Onset and duration

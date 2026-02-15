@@ -1,4 +1,3 @@
-# TODO add window constraints
 import os
 import json
 from pathlib import Path
@@ -8,16 +7,18 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_chroma import Chroma
 from datetime import datetime
+import re
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-
+MAX_USER_MESSAGES = int(os.getenv("MAX_USER_MESSAGES", "10"))
+TRACKSANTE_COLLECTION = os.getenv("TRACKSANTE_COLLECTION", "tracksante_policy")
 _VECTOR_DB_CACHE = None
 
 BASE_DIR = Path(__file__).resolve().parent                  
 PROJECT_ROOT = BASE_DIR.parent                              
-PERSIST_DIR = (PROJECT_ROOT / "vectordb/tracksante_chroma").resolve()
+PERSIST_DIR = (PROJECT_ROOT / f"vectordb/{TRACKSANTE_COLLECTION}").resolve()
 STATE_DIR = (PROJECT_ROOT / "rag_state").resolve()
 SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 SESSION_DIR = STATE_DIR / "sessions" / SESSION_ID
@@ -160,14 +161,12 @@ Rules for fields:
   assistant_message MUST clearly state that in-person medical evaluation is needed.
 """
 
-
-
-
 PROMPT = ChatPromptTemplate.from_messages([
     ("system", SYSTEM_RULES),
     MessagesPlaceholder(variable_name="chat_history"),
     ("human",
      "User message:\n{user_message}\n\n"
+     "Conversation window:\n{turn_budget_note}\n\n"
      "Known structured context so far (JSON):\n{user_context}\n\n"
      "Retrieved context snippets:\n{context}\n\n"
      "Return ONLY the JSON object."
@@ -191,19 +190,134 @@ def merge_facts(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]
             continue
         merged[k] = v
     return merged
+    
+#TODO fix this function so that it parses the response for the word "sensor" and if the word sensor is present, it extracts it by reading the word before it, and that gets outputted to the UI. 
+# def extract_recommended_sensor(data: Dict[str, Any]) -> str:
+#     if "Sensor" in response2.content:
+#         return response2.content
+
+def count_user_turns(chat_history_raw: List[Dict[str, Any]]) -> int:
+    return sum(1 for m in chat_history_raw if m.get("role") == "user")
+
+
+def invoke_json_response(
+    llm: ChatOllama,
+    chat_history: List[Any],
+    user_message: str,
+    user_context: Dict[str, Any],
+    context: str,
+    turn_budget_note: str,
+) -> (Dict[str, Any], str):
+    response = llm.invoke(
+        PROMPT.format_messages(
+            chat_history=chat_history,
+            user_message=user_message,
+            user_context=json.dumps(user_context, ensure_ascii=False),
+            context=context,
+            turn_budget_note=turn_budget_note,
+        )
+    )
+    raw = (response.content or "").strip()
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        repair_msg = (
+            "Your output was not valid JSON. Re-output ONLY valid JSON matching the schema, "
+            "with no extra text."
+        )
+        response2 = llm.invoke(
+            PROMPT.format_messages(
+                chat_history=chat_history,
+                user_message=repair_msg,
+                user_context=json.dumps(user_context, ensure_ascii=False),
+                context=context,
+                turn_budget_note=turn_budget_note,
+            )
+        )
+        raw = (response2.content or "").strip()
+        data = json.loads(raw)
+
+    return data, raw
+
+
+def finalize_if_window_reached(
+    llm: ChatOllama,
+    chat_history: List[Any],
+    user_context: Dict[str, Any],
+    context: str,
+    turn_budget_note: str,
+    current_user_turns: int,
+    data: Dict[str, Any],
+    raw: str,
+) -> (Dict[str, Any], str):
+    if current_user_turns < MAX_USER_MESSAGES:
+        return data, raw
+    if data.get("suggested_next_step") != "continue_intake":
+        return data, raw
+
+    force_finalize_message = (
+        f"Conversation window reached ({current_user_turns}/{MAX_USER_MESSAGES} user messages). "
+        "You must finalize now and ask no more questions. "
+        "If enough information is present, recommend exactly one TrackSante sensor and set "
+        "suggested_next_step='proceed_to_measurements'. "
+        "If information is insufficient or concern is outside measurement scope, set "
+        "recommended_sensor='NO_SENSOR_MATCH' and suggested_next_step='in_person_evaluation' "
+        "(or 'urgent_care' for red flags)."
+    )
+    return invoke_json_response(
+        llm=llm,
+        chat_history=chat_history,
+        user_message=force_finalize_message,
+        user_context=user_context,
+        context=context,
+        turn_budget_note=turn_budget_note,
+    )
+
+
+def add_exit_metadata(data: Dict[str, Any], current_user_turns: int) -> Dict[str, Any]:
+    result = dict(data)
+    next_step = result.get("suggested_next_step", "continue_intake")
+
+    should_exit = (next_step != "continue_intake") or (current_user_turns >= MAX_USER_MESSAGES)
+
+    if next_step == "proceed_to_measurements":
+        next_page = "measurements"
+        exit_reason = "sensor_recommended"
+    elif next_step == "urgent_care":
+        next_page = "urgent_care"
+        exit_reason = "urgent_care"
+    elif next_step == "in_person_evaluation":
+        next_page = "in_person_evaluation"
+        exit_reason = "in_person_evaluation"
+    elif current_user_turns >= MAX_USER_MESSAGES:
+        next_page = "summary"
+        exit_reason = "max_messages_reached"
+    else:
+        next_page = None
+        exit_reason = None
+
+    result["user_message_count"] = current_user_turns
+    result["max_user_messages"] = MAX_USER_MESSAGES
+    result["should_exit"] = should_exit
+    result["exit_command"] = "exit" if should_exit else None
+    result["next_page"] = next_page
+    result["exit_reason"] = exit_reason
+    return result
 
 def load_vectordb() -> Chroma:
     global _VECTOR_DB_CACHE
     if _VECTOR_DB_CACHE is not None:
         return _VECTOR_DB_CACHE
-    
+
     embeddings = OllamaEmbeddings(model=OLLAMA_EMBED_MODEL, base_url=OLLAMA_BASE_URL)
     _VECTOR_DB_CACHE = Chroma(
-        collection_name="tracksante_kb",
+        collection_name=TRACKSANTE_COLLECTION,
         embedding_function=embeddings,
         persist_directory=str(PERSIST_DIR)
     )
     return _VECTOR_DB_CACHE
+
 
 def retrieve_context(vs: Chroma, query: str, k: int = 4) -> (str, List[str]):
     # TODO upgrade to MMR
@@ -224,7 +338,6 @@ def chat_once(
     user_message: str,
     session_id: str | None = None,
 ) -> Dict[str, Any]:
-
     """
     Single-turn chat call for FastAPI.
 
@@ -233,8 +346,6 @@ def chat_once(
     - Ongoing chat (session_id provided): loads that session's history/context.
     - Storage is per-user and per-session on disk.
     """
-
-    import re
 
     # temporary until we implement log ins, user_id for filesystem safety
     safe_user_id = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip() or "anonymous")
@@ -274,34 +385,32 @@ def chat_once(
     vs = load_vectordb()
     context, sources = retrieve_context(vs, user_message, k=4)
 
-    response = llm.invoke(
-        PROMPT.format_messages(
-            chat_history=chat_history,
-            user_message=user_message,
-            user_context=json.dumps(user_context, ensure_ascii=False),
-            context=context,
-        )
+    prior_user_turns = count_user_turns(chat_history_raw)
+    current_user_turns = prior_user_turns + 1
+    turn_budget_note = (
+        f"This is user message {current_user_turns} of maximum {MAX_USER_MESSAGES}. "
+        "If at or over the max, finalize now and ask no more questions."
     )
-    raw = (response.content or "").strip()
 
-    #repair if invalid JSON
-    try:
-        data = json.loads(raw)
-    except Exception:
-        repair_msg = (
-            "Your output was not valid JSON. Re-output ONLY valid JSON matching the schema, "
-            "with no extra text."
-        )
-        response2 = llm.invoke(
-            PROMPT.format_messages(
-                chat_history=chat_history,
-                user_message=repair_msg,
-                user_context=json.dumps(user_context, ensure_ascii=False),
-                context=context,
-            )
-        )
-        raw = (response2.content or "").strip()
-        data = json.loads(raw)
+    data, raw = invoke_json_response(
+        llm=llm,
+        chat_history=chat_history,
+        user_message=user_message,
+        user_context=user_context,
+        context=context,
+        turn_budget_note=turn_budget_note,
+    )
+
+    data, raw = finalize_if_window_reached(
+        llm=llm,
+        chat_history=chat_history,
+        user_context=user_context,
+        context=context,
+        turn_budget_note=turn_budget_note,
+        current_user_turns=current_user_turns,
+        data=data,
+        raw=raw,
+    )
 
     #update stored context
     user_context = merge_facts(user_context, data.get("collected_facts", {}))
@@ -321,6 +430,7 @@ def chat_once(
     if "sources" not in data or not data["sources"]:
         data["sources"] = sources
 
+    data = add_exit_metadata(data, current_user_turns)
     data["session_id"] = sid
     return data
 
@@ -351,37 +461,32 @@ def main():
 
         context, sources = retrieve_context(vs, user_message, k=4)
 
-        response = llm.invoke(
-            PROMPT.format_messages(
-                chat_history=chat_history,
-                user_message=user_message,
-                user_context=json.dumps(user_context, ensure_ascii=False),
-                context=context,
-            )
+        prior_user_turns = sum(1 for m in chat_history if isinstance(m, HumanMessage))
+        current_user_turns = prior_user_turns + 1
+        turn_budget_note = (
+            f"This is user message {current_user_turns} of maximum {MAX_USER_MESSAGES}. "
+            "If at or over the max, finalize now and ask no more questions."
         )
 
-        raw = response.content.strip()
+        data, raw = invoke_json_response(
+            llm=llm,
+            chat_history=chat_history,
+            user_message=user_message,
+            user_context=user_context,
+            context=context,
+            turn_budget_note=turn_budget_note,
+        )
 
-        # one-shot repair prompt in case the JSON is invalid
-        # TODO improve with a more robust method
-
-        try:
-            data = json.loads(raw)
-        except Exception:
-            repair_msg = (
-                "Your output was not valid JSON. Re-output ONLY valid JSON matching the schema, "
-                "with no extra text."
-            )
-            response2 = llm.invoke(
-                PROMPT.format_messages(
-                    chat_history=chat_history,
-                    user_message=repair_msg,
-                    user_context=json.dumps(user_context, ensure_ascii=False),
-                    context=context,
-                )
-            )
-            raw = response2.content.strip()
-            data = json.loads(raw)
+        data, raw = finalize_if_window_reached(
+            llm=llm,
+            chat_history=chat_history,
+            user_context=user_context,
+            context=context,
+            turn_budget_note=turn_budget_note,
+            current_user_turns=current_user_turns,
+            data=data,
+            raw=raw,
+        )
 
         # update stored context
         user_context = merge_facts(user_context, data.get("collected_facts", {}))
@@ -401,10 +506,16 @@ def main():
         if "sources" not in data or not data["sources"]:
             data["sources"] = sources
 
+        data = add_exit_metadata(data, current_user_turns)
+
         print("\nAssistant:", data["assistant_message"])
         # for i, q in enumerate(data.get("questions_to_ask", []), 1):
         #     print(f"  {i}. {q}")
         # print()
+
+        if data.get("should_exit"):
+            print("\nConversation complete. Type 'exit' to leave this session.")
+            break
 
 
 if __name__ == "__main__":
