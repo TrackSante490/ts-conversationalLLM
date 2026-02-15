@@ -20,4 +20,7 @@ jobs:
 
           echo "$GITHUB_SHA" > /srv/capstone/cappie_run/rag_conv/.deployed_sha
 
+          docker compose up -d ollama
+          docker compose exec ollama ollama pull nomic-embed-text
+          docker compose exec ollama ollama pull llama3.1
           docker compose -f /srv/capstone/docker-compose.yml restart api
