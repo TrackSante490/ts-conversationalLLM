@@ -1,4 +1,3 @@
-# TODO add window constraints
 import os
 import json
 from pathlib import Path
@@ -8,17 +7,18 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_chroma import Chroma
 from datetime import datetime
+import re
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 MAX_USER_MESSAGES = int(os.getenv("MAX_USER_MESSAGES", "10"))
-
+TRACKSANTE_COLLECTION = os.getenv("TRACKSANTE_COLLECTION", "tracksante_policy")
 _VECTOR_DB_CACHE = None
 
 BASE_DIR = Path(__file__).resolve().parent                  
 PROJECT_ROOT = BASE_DIR.parent                              
-PERSIST_DIR = (PROJECT_ROOT / "vectordb/tracksante_chroma").resolve()
+PERSIST_DIR = (PROJECT_ROOT / f"vectordb/{TRACKSANTE_COLLECTION}").resolve()
 STATE_DIR = (PROJECT_ROOT / "rag_state").resolve()
 SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 SESSION_DIR = STATE_DIR / "sessions" / SESSION_ID
@@ -190,7 +190,11 @@ def merge_facts(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]
             continue
         merged[k] = v
     return merged
-
+    
+#TODO fix this function so that it parses the response for the word "sensor" and if the word sensor is present, it extracts it by reading the word before it, and that gets outputted to the UI. 
+# def extract_recommended_sensor(data: Dict[str, Any]) -> str:
+#     if "Sensor" in response2.content:
+#         return response2.content
 
 def count_user_turns(chat_history_raw: List[Dict[str, Any]]) -> int:
     return sum(1 for m in chat_history_raw if m.get("role") == "user")
@@ -305,14 +309,15 @@ def load_vectordb() -> Chroma:
     global _VECTOR_DB_CACHE
     if _VECTOR_DB_CACHE is not None:
         return _VECTOR_DB_CACHE
-    
+
     embeddings = OllamaEmbeddings(model=OLLAMA_EMBED_MODEL, base_url=OLLAMA_BASE_URL)
     _VECTOR_DB_CACHE = Chroma(
-        collection_name="tracksante_kb",
+        collection_name=TRACKSANTE_COLLECTION,
         embedding_function=embeddings,
         persist_directory=str(PERSIST_DIR)
     )
     return _VECTOR_DB_CACHE
+
 
 def retrieve_context(vs: Chroma, query: str, k: int = 4) -> (str, List[str]):
     # TODO upgrade to MMR
@@ -341,8 +346,6 @@ def chat_once(
     - Ongoing chat (session_id provided): loads that session's history/context.
     - Storage is per-user and per-session on disk.
     """
-
-    import re
 
     # temporary until we implement log ins, user_id for filesystem safety
     safe_user_id = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip() or "anonymous")

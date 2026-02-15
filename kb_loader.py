@@ -40,6 +40,15 @@ def load_markdown_kb():
                     metadata=metadata
                 )
             )
+            print("Loaded:", path)
 
     print(f"Found {md_count} markdown files, loaded {len(documents)} docs")  # DEBUG
     return documents
+
+if __name__ == "__main__":
+    docs = load_markdown_kb()
+    print("First doc preview:" if docs else "No docs loaded.")
+    if docs:
+        print(docs[0].metadata)
+        print(docs[0].page_content[:300])
+
