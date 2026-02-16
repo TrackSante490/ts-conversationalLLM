@@ -431,6 +431,7 @@ def chat_once(
         data["sources"] = sources
 
     data = add_exit_metadata(data, current_user_turns)
+    data["selected_sensor"] = data.get("recommended_sensor")
     data["session_id"] = sid
     return data
 
@@ -508,10 +509,13 @@ def main():
 
         data = add_exit_metadata(data, current_user_turns)
 
-        print("\nAssistant:", data["assistant_message"])
+        # print("\nAssistant:", data["assistant_message"])
         # for i, q in enumerate(data.get("questions_to_ask", []), 1):
         #     print(f"  {i}. {q}")
         # print()
+        print("\nAssistant:", data.get("assistant_message"))
+        print("Selected sensor:", data.get("selected_sensor"))
+        print("Recommended sensor:", data.get("recommended_sensor"))
 
         if data.get("should_exit"):
             print("\nConversation complete. Type 'exit' to leave this session.")
