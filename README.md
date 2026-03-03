@@ -1,4 +1,4 @@
-# TrackSanté — Conversational RAG LLM
+# TrackSanté - Conversational RAG LLM
 
 This repository contains a **conversational, retrieval-augmented LLM agent** designed around the TrackSanté concept of guided, health-oriented coaching. The system combines:
 
