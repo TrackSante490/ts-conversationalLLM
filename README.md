@@ -27,21 +27,6 @@ This repository contains a **conversational, retrieval-augmented LLM agent** des
 
 ---
 
-## Key capabilities
-
-### Conversational, multi-turn interaction
-The agent runs as an interactive CLI and tracks multi-turn conversation state.
-
-### Retrieval-Augmented Generation (RAG)
-On each user message, the agent retrieves relevant knowledge base context and uses it to ground the response.
-
-### Session persistence
-The agent persists:
-- **chat history**
-- **user context** (collected facts)
-
----
-
 ## Setup
 
 ### 1) Create a virtual environment and install dependencies
