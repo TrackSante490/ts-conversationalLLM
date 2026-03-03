@@ -307,6 +307,8 @@ def add_exit_metadata(data: Dict[str, Any], current_user_turns: int) -> Dict[str
 
 def load_vectordb() -> Chroma:
     global _VECTOR_DB_CACHE
+    print("Loading Chroma from:", PERSIST_DIR)
+    print("Using collection:", TRACKSANTE_COLLECTION)
     if _VECTOR_DB_CACHE is not None:
         return _VECTOR_DB_CACHE
 
@@ -322,7 +324,11 @@ def load_vectordb() -> Chroma:
 def retrieve_context(vs: Chroma, query: str, k: int = 4) -> (str, List[str]):
     # TODO upgrade to MMR
     docs = vs.similarity_search(query, k=k)
-
+    print("\n--- TOP RETRIEVED CHUNK ---")
+    if docs:
+        print(docs[0].metadata)
+        print(docs[0].page_content[:400])
+    print("--- END CHUNK ---\n")
     sources = []
     chunks = []
     for d in docs:
@@ -383,7 +389,7 @@ def chat_once(
     )
 
     vs = load_vectordb()
-    context, sources = retrieve_context(vs, user_message, k=4)
+    context, sources = retrieve_context(vs, user_message, k=1)
 
     prior_user_turns = count_user_turns(chat_history_raw)
     current_user_turns = prior_user_turns + 1
@@ -431,6 +437,7 @@ def chat_once(
         data["sources"] = sources
 
     data = add_exit_metadata(data, current_user_turns)
+    data["selected_sensor"] = data.get("recommended_sensor")
     data["session_id"] = sid
     return data
 
@@ -459,7 +466,7 @@ def main():
         if user_message.lower() in ["exit", "quit"]:
             break
 
-        context, sources = retrieve_context(vs, user_message, k=4)
+        context, sources = retrieve_context(vs, user_message, k=1)
 
         prior_user_turns = sum(1 for m in chat_history if isinstance(m, HumanMessage))
         current_user_turns = prior_user_turns + 1
@@ -508,10 +515,12 @@ def main():
 
         data = add_exit_metadata(data, current_user_turns)
 
-        print("\nAssistant:", data["assistant_message"])
+        # print("\nAssistant:", data["assistant_message"])
         # for i, q in enumerate(data.get("questions_to_ask", []), 1):
         #     print(f"  {i}. {q}")
         # print()
+        print("\nAssistant:", data.get("assistant_message"))
+        print("Recommended sensor:", data.get("recommended_sensor"))
 
         if data.get("should_exit"):
             print("\nConversation complete. Type 'exit' to leave this session.")

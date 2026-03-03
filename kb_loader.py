@@ -40,7 +40,6 @@ def load_markdown_kb():
                     metadata=metadata
                 )
             )
-            print("Loaded:", path)
 
     print(f"Found {md_count} markdown files, loaded {len(documents)} docs")  # DEBUG
     return documents

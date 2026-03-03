@@ -1,9 +1,10 @@
 ---
-category: vitals
+category: sensor_reference
 type: measurement_reference
+priority: high
 used_by: guidance_llm
-version: 0.1
 ---
+
 
 This document describes the physiological measurements available in TrackSanté,
 their purpose, and when they are typically relevant based on user-reported symptoms.
