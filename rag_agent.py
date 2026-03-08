@@ -219,7 +219,117 @@ def normalize_assistant_message(data: Dict[str, Any]) -> str:
         assistant_message = f"{assistant_message}."
 
     return f"{assistant_message} {' '.join(missing_questions)}"
-    
+
+
+def response_needs_message_repair(data: Dict[str, Any]) -> bool:
+    assistant_message = data.get("assistant_message")
+    if not isinstance(assistant_message, str):
+        assistant_message = ""
+    assistant_message = assistant_message.strip()
+
+    questions = [
+        q.strip()
+        for q in (data.get("questions_to_ask") or [])
+        if isinstance(q, str) and q.strip()
+    ]
+    next_step = data.get("suggested_next_step") or "continue_intake"
+
+    if next_step == "continue_intake":
+        return not assistant_message and not questions
+
+    return not assistant_message
+
+
+def last_assistant_message(chat_history: List[Any]) -> str:
+    for message in reversed(chat_history):
+        if isinstance(message, AIMessage):
+            content = getattr(message, "content", "")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return ""
+
+
+def response_repeats_last_assistant_turn(data: Dict[str, Any], chat_history: List[Any]) -> bool:
+    next_step = data.get("suggested_next_step") or "continue_intake"
+    if next_step != "continue_intake":
+        return False
+
+    previous_message = last_assistant_message(chat_history).lower()
+    current_message = normalize_assistant_message(data).strip().lower()
+    return bool(previous_message and current_message and current_message == previous_message)
+
+
+def fallback_continue_intake_questions(chat_history: List[Any]) -> List[str]:
+    previous_message = last_assistant_message(chat_history).lower()
+    if any(term in previous_message for term in ("severe", "daily activities", "triggers", "patterns")):
+        return [
+            "Have you noticed any other symptoms happening with this, such as dizziness, fever, nausea, or vision changes?",
+            "Have you had similar episodes before, or any recent illness, injury, or change in routine?",
+        ]
+
+    return [
+        "How severe is this right now, and is it interfering with your daily activities?",
+        "Have you noticed any triggers, patterns, or other symptoms happening with it?",
+    ]
+
+
+def fill_missing_message_fields(
+    data: Dict[str, Any],
+    chat_history: List[Any],
+    force_new_questions: bool = False,
+) -> Dict[str, Any]:
+    result = dict(data)
+    next_step = result.get("suggested_next_step") or "continue_intake"
+
+    questions: List[str] = []
+    if not force_new_questions:
+        questions = [
+            q.strip()
+            for q in (result.get("questions_to_ask") or [])
+            if isinstance(q, str) and q.strip()
+        ]
+    if not questions and not force_new_questions:
+        handoff_summary = result.get("handoff_summary")
+        if isinstance(handoff_summary, dict):
+            questions = [
+                q.strip()
+                for q in (handoff_summary.get("open_questions") or [])
+                if isinstance(q, str) and q.strip()
+            ][:2]
+
+    if next_step == "continue_intake" and not questions:
+        questions = fallback_continue_intake_questions(chat_history)
+        result["questions_to_ask"] = questions
+
+    if next_step == "continue_intake":
+        result["assistant_message"] = " ".join(questions)
+        return result
+
+    recommended_sensor = result.get("recommended_sensor")
+    if isinstance(recommended_sensor, str):
+        recommended_sensor = recommended_sensor.strip()
+    else:
+        recommended_sensor = ""
+
+    if next_step == "proceed_to_measurements" and recommended_sensor and recommended_sensor != "NO_SENSOR_MATCH":
+        result["assistant_message"] = (
+            f"From what you shared in this conversation, I recommend using {recommended_sensor}."
+        )
+    elif next_step == "urgent_care":
+        result["assistant_message"] = (
+            "Based on what you shared, urgent in-person medical evaluation is needed."
+        )
+    elif next_step == "in_person_evaluation" or recommended_sensor == "NO_SENSOR_MATCH":
+        result["assistant_message"] = (
+            "Based on what you shared, in-person medical evaluation is needed."
+        )
+    else:
+        result["assistant_message"] = (
+            "Can you tell me a bit more about what you're experiencing?"
+        )
+
+    return result
+
 #TODO fix this function so that it parses the response for the word "sensor" and if the word sensor is present, it extracts it by reading the word before it, and that gets outputted to the UI. 
 # def extract_recommended_sensor(data: Dict[str, Any]) -> str:
 #     if "Sensor" in response2.content:
@@ -266,6 +376,44 @@ def invoke_json_response(
         )
         raw = (response2.content or "").strip()
         data = json.loads(raw)
+
+    if response_needs_message_repair(data):
+        repair_msg = (
+            "Your previous JSON was incomplete. "
+            "If suggested_next_step='continue_intake', you must provide a non-empty "
+            "assistant_message and at least one follow-up question in questions_to_ask. "
+            "Do not repeat questions already answered in the latest user message or already "
+            "present in collected_facts. "
+            "If suggested_next_step is any exit state, you must provide a non-empty "
+            "assistant_message. Re-output ONLY valid JSON matching the schema, with no extra text."
+        )
+        response2 = llm.invoke(
+            PROMPT.format_messages(
+                chat_history=chat_history,
+                user_message=repair_msg,
+                user_context=json.dumps(user_context, ensure_ascii=False),
+                context=context,
+                turn_budget_note=turn_budget_note,
+            )
+        )
+        repaired_raw = (response2.content or "").strip()
+        try:
+            repaired_data = json.loads(repaired_raw)
+        except Exception:
+            repaired_data = None
+
+        if isinstance(repaired_data, dict):
+            data = repaired_data
+            raw = repaired_raw
+
+    needs_message_fallback = response_needs_message_repair(data)
+    repeats_last_turn = response_repeats_last_assistant_turn(data, chat_history)
+    if needs_message_fallback or repeats_last_turn:
+        data = fill_missing_message_fields(
+            data,
+            chat_history=chat_history,
+            force_new_questions=repeats_last_turn,
+        )
 
     return data, raw
 
