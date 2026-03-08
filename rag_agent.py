@@ -190,6 +190,35 @@ def merge_facts(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]
             continue
         merged[k] = v
     return merged
+
+
+def normalize_assistant_message(data: Dict[str, Any]) -> str:
+    assistant_message = data.get("assistant_message")
+    if not isinstance(assistant_message, str):
+        assistant_message = ""
+    assistant_message = assistant_message.strip()
+
+    questions = [
+        q.strip()
+        for q in (data.get("questions_to_ask") or [])
+        if isinstance(q, str) and q.strip()
+    ]
+
+    if not questions:
+        return assistant_message
+
+    if not assistant_message:
+        return " ".join(questions)
+
+    normalized_message = assistant_message.lower()
+    missing_questions = [q for q in questions if q.lower() not in normalized_message]
+    if not missing_questions:
+        return assistant_message
+
+    if assistant_message[-1] not in ".!?":
+        assistant_message = f"{assistant_message}."
+
+    return f"{assistant_message} {' '.join(missing_questions)}"
     
 #TODO fix this function so that it parses the response for the word "sensor" and if the word sensor is present, it extracts it by reading the word before it, and that gets outputted to the UI. 
 # def extract_recommended_sensor(data: Dict[str, Any]) -> str:
@@ -414,6 +443,7 @@ def chat_once(
 
     #update stored context
     user_context = merge_facts(user_context, data.get("collected_facts", {}))
+    data["assistant_message"] = normalize_assistant_message(data)
 
     # Keep only the conversational reply in history. The full structured payload
     # is already persisted separately and feeding prior JSON back into the model
