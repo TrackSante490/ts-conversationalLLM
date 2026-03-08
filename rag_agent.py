@@ -415,9 +415,16 @@ def chat_once(
     #update stored context
     user_context = merge_facts(user_context, data.get("collected_facts", {}))
 
+    # Keep only the conversational reply in history. The full structured payload
+    # is already persisted separately and feeding prior JSON back into the model
+    # makes subsequent turns much slower.
+    assistant_history_text = data.get("assistant_message")
+    if not isinstance(assistant_history_text, str) or not assistant_history_text.strip():
+        assistant_history_text = raw
+
     # append history + persist
     chat_history.append(HumanMessage(content=user_message))
-    chat_history.append(AIMessage(content=raw))
+    chat_history.append(AIMessage(content=assistant_history_text))
 
     chat_history_raw_out = []
     for m in chat_history:
